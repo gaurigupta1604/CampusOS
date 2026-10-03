@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment: {POSTGRES_DB: campusos, POSTGRES_USER: campusos, POSTGRES_PASSWORD: campusos}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U campusos"], interval: 5s, timeout: 5s, retries: 10}
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes: [redis_data:/data]
+    healthcheck: {test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 10}
+  api:
+    build: ./backend
+    env_file: .env
+    ports: ["8000:8000"]
+    depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    command: sh -c "python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+  worker:
+    build: ./backend
+    env_file: .env
+    depends_on: [api, redis]
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=INFO
+  beat:
+    build: ./backend
+    env_file: .env
+    depends_on: [api, redis]
+    command: celery -A app.workers.celery_app.celery_app beat --loglevel=INFO
+  frontend:
+    build: ./frontend
+    environment: [NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1]
+    ports: ["3000:3000"]
+    depends_on: [api]
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes: [./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro]
+    ports: ["9090:9090"]
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment: [GF_SECURITY_ADMIN_PASSWORD=campusos]
+    volumes: [./infra/monitoring/grafana-dashboard.json:/var/lib/grafana/dashboards/campusos.json:ro]
+    ports: ["3001:3000"]
+volumes: {postgres_data: {}, redis_data: {}}
